@@ -1,0 +1,13 @@
+{
+  "name": "issh-plugin-host-password",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "package": "node package.mjs"
+  },
+  "devDependencies": {
+    "vite": "8.2.4"
+  }
+}

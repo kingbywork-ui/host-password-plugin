@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>批量修改主机密码</title>
+<style>
+:root {
+ color-scheme:dark;
+ --base:#17191d;
+ --panel:#202328;
+ --line:#353a42;
+ --fg:#e6e8eb;
+ --muted:#a5abb5;
+ --field:#17191d;
+ --signal:#59d98e;
+ --signal-dim:rgba(89,217,142,.1);
+ --signal-border:rgba(89,217,142,.35);
+ --risk:#f6b44b;
+ --risk-dim:rgba(246,180,75,.14);
+ --risk-border:rgba(246,180,75,.35);
+ --danger:#ef5f67;
+ --danger-dim:rgba(239,95,103,.12);
+ font-family:'Segoe UI Variable','Segoe UI',system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+ color:var(--fg);
+ background:transparent;
+ font-size:13px;
+}
+:root[data-color-scheme='light'] {
+ color-scheme:light;
+ --base:#f4f6f8;
+ --panel:#fff;
+ --line:#d0d7de;
+ --fg:#1f2933;
+ --muted:#57606a;
+ --field:#f4f6f8;
+ --signal:#18794e;
+ --signal-dim:rgba(24,121,78,.1);
+ --signal-border:rgba(24,121,78,.35);
+ --risk:#9a6700;
+ --risk-dim:rgba(154,103,0,.12);
+ --risk-border:rgba(154,103,0,.35);
+ --danger:#cf222e;
+ --danger-dim:rgba(207,34,46,.1);
+}
+@media(prefers-color-scheme:light) {
+ :root[data-color-scheme='auto'] {
+  color-scheme:light;
+  --base:#f4f6f8;
+  --panel:#fff;
+  --line:#d0d7de;
+  --fg:#1f2933;
+  --muted:#57606a;
+  --field:#f4f6f8;
+  --signal:#18794e;
+  --signal-dim:rgba(24,121,78,.1);
+  --signal-border:rgba(24,121,78,.35);
+  --risk:#9a6700;
+  --risk-dim:rgba(154,103,0,.12);
+  --risk-border:rgba(154,103,0,.35);
+  --danger:#cf222e;
+  --danger-dim:rgba(207,34,46,.1);
+ }
+}
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;min-width:0;margin:0;overflow:hidden}
+body{font-family:inherit;line-height:1.45;color:var(--fg);background:transparent}
+button,input,select{font:inherit}
+button{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--fg);cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){border-color:var(--signal-border);background:var(--signal-dim);color:var(--signal)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+input:not([type=checkbox]),select{width:100%;min-width:0;min-height:32px;padding:5px 8px;border:1px solid var(--line);border-radius:4px;background:var(--field);color:var(--fg)}
+input[type=number]{width:64px;flex:0 0 64px;font-variant-numeric:tabular-nums}
+input[type=checkbox]{accent-color:var(--signal);flex:none;margin:0}
+input:disabled,select:disabled{opacity:.55;color:var(--muted);cursor:not-allowed}
+.shell{display:flex;flex-direction:column;gap:12px;width:100%;height:100%;min-width:0;min-height:0;margin:auto;padding:14px}
+.heading{display:flex;align-items:center;gap:10px;flex:none;flex-wrap:wrap;min-width:0}
+.heading h1{margin:0;font-size:15px;font-weight:650}
+.heading p{margin:3px 0 0;color:var(--muted);font-size:12px}
+.heading .spacer{flex:1 1 12px}
+.workspace{flex:1 1 0;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
+.layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(330px,1fr);gap:12px;min-width:0;min-height:350px;height:100%}
+.box{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:5px;background:var(--panel)}
+.account-box{display:flex;flex-direction:column;min-height:0}
+.bar{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;min-width:0;padding:10px 12px;border-bottom:1px solid var(--line)}
+.bar strong{font-size:13px;font-weight:600}
+.account-tools{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:10px;flex:none;padding:10px 12px}
+.filter{display:grid;gap:5px;min-width:0;color:var(--muted);font-size:12px}
+.filter select{text-overflow:ellipsis}
+.scope{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;padding:0 12px 9px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line)}
+.accounts{flex:1 1 0;min-width:0;min-height:120px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.account{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:9px;min-width:0;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.account:last-child{border-bottom:0}
+.account:hover,.account.selected{background:var(--signal-dim)}
+.account-info{display:grid;gap:3px;min-width:0}
+.account-title{display:flex;align-items:baseline;gap:9px;min-width:0}
+.account-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.group-path{min-width:0;max-width:48%;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}
+.host{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:11px/1.4 ui-monospace,'Cascadia Code',Consolas,monospace}
+.badge{max-width:100%;color:var(--muted);font-size:11px;white-space:nowrap}
+.badge.pending{color:var(--risk)}
+.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 12px;padding:14px 12px}
+.field{display:flex;align-items:center;justify-content:space-between;gap:7px;min-width:0}
+.field label{color:var(--muted);font-size:12px;white-space:nowrap}
+.wide{grid-column:1/-1}
+.field.wide input[type=text]{flex:1;width:0;margin-left:4px}
+.check{display:flex;align-items:center;gap:7px;min-width:0;color:var(--fg)}
+.rule-hint{margin:0;padding:0 12px 12px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.recovery-only{margin:0 12px 12px;padding-top:10px;border-top:1px solid var(--line);font-size:12px}
+.recovery-only summary{color:var(--risk);cursor:pointer}
+.recovery-only p{margin:8px 0;color:var(--muted);overflow-wrap:anywhere}
+.recovery-row{display:flex;align-items:end;flex-wrap:wrap;gap:8px;min-width:0}
+.recovery-row .filter{flex:1 1 180px}
+#recoverOther{border-color:var(--risk-border);color:var(--risk)}
+.account-actions{display:flex;align-items:center;gap:7px;flex:none;flex-wrap:wrap;min-width:0;padding:9px 12px;border-top:1px solid var(--line)}
+#selectedCount{flex-basis:100%;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+#clearSelection{margin-left:auto}
+#recover{border-color:var(--risk-border);color:var(--risk)}
+#cancel:not(:disabled){border-color:var(--danger);color:var(--danger)}
+.primary{border-color:var(--signal);background:var(--signal);color:var(--base);font-weight:600}
+.primary:hover:not(:disabled){border-color:var(--signal);background:var(--signal);color:var(--base);filter:brightness(1.06)}
+.feedback{flex:none;min-width:0}
+#notice{min-height:18px;margin:0;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+#notice:empty,.feedback:has(#notice:empty):has(#results:empty){display:none}
+#notice.error{color:var(--danger)}
+#results{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));align-content:start;gap:6px;max-height:min(20vh,120px);min-width:0;margin-top:7px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+#results:empty{display:none}
+.result{min-width:0;padding:6px 8px;overflow-wrap:anywhere;border-left:2px solid var(--muted);border-radius:2px;background:var(--panel);font-size:12px}
+.result.success{border-color:var(--signal)}
+.result.failed{border-color:var(--danger)}
+.result.pending{border-color:var(--risk)}
+#history{flex:none;max-height:80px;padding:7px 12px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;color:var(--muted);font-size:11px;line-height:1.6;overflow-wrap:anywhere;border-top:1px solid var(--line)}
+#history:empty{display:none}
+.hint{flex:none;margin:0;padding:0 12px 10px;color:var(--risk);font-size:12px;overflow-wrap:anywhere}
+.hint:empty{display:none}
+.muted{padding:18px 12px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.footer{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;min-width:0;padding-top:11px;border-top:1px solid var(--line)}
+.footer .spacer{flex:1 1 10px}
+.footer-note{flex-basis:100%;margin:0;color:var(--muted);font-size:11px}
+@media(max-width:860px){
+ .layout{grid-template-columns:minmax(0,1fr);height:auto;min-height:0}
+ .account-box{min-height:320px}
+ .accounts{flex:none;height:min(35vh,280px);min-height:140px}
+ .controls{gap:12px 20px}
+}
+@media(max-width:520px){
+ .shell{gap:9px;padding:10px}
+ .heading{gap:7px}
+ .heading .intro{flex-basis:100%}
+ .heading .spacer{display:none}
+ .heading button{min-height:30px;padding:4px 9px}
+ .account-tools{grid-template-columns:minmax(0,1fr);gap:8px;padding:9px}
+ .scope{padding:0 9px 9px}
+ .account{gap:7px;padding:9px}
+ .account-title{display:grid;gap:1px}
+ .group-path{max-width:100%;margin-left:0}
+ .badge{font-size:10px}
+ .account-actions{gap:6px;padding:9px}
+ .account-actions button{font-size:12px;padding:4px 7px}
+ .controls{grid-template-columns:minmax(0,1fr);gap:10px;padding:12px}
+ .footer{gap:7px;padding-top:9px}
+ .footer .spacer{display:none}
+ .footer .check{margin-left:auto;font-size:12px}
+}
+</style>
+</head>
+<body>
+<main class="shell">
+ <header class="heading">
+  <div class="intro"><h1>选择改密账户</h1><p>仅显示密码认证主机 · 密码保存在 Vault</p></div>
+  <span class="spacer"></span><button id="unlock">解锁 Vault</button><button id="refresh">刷新</button>
+ </header>
+ <div class="workspace">
+  <div class="layout">
+   <section class="box account-box" aria-label="托管主机账户">
+    <div class="bar"><strong>选择账户</strong></div>
+    <div class="account-tools">
+     <label class="filter" for="group">主机分组<select id="group"><option value="all">全部分组</option></select></label>
+     <label class="filter" for="search">搜索账户<input id="search" type="search" placeholder="搜索主机、地址或登录名"></label>
+    </div>
+    <div class="scope"><label class="check"><input id="all" type="checkbox">全选当前结果</label><span id="scopeCount">当前 0 个账户</span></div>
+    <p id="compatibilityHint" class="hint"></p>
+    <div id="accounts" class="accounts"><div class="muted">正在读取密码认证主机…</div></div>
+    <div class="account-actions"><span id="selectedCount">已选 0 个账户 · 跨分组保留</span><button id="historyBtn">查看记录</button><button id="recover">处理待确认</button><button id="clearSelection">清空选择</button></div>
+    <div id="history" aria-live="polite"></div>
+   </section>
+   <section class="box rules-box" aria-label="密码规则">
+    <div class="bar"><strong>密码规则</strong></div>
+    <div class="controls">
+     <div class="field"><label for="length">密码长度</label><input id="length" type="number" min="6" max="32" value="16"></div><div class="field"><label for="repeat">重复上限</label><input id="repeat" type="number" min="1" max="32" value="3"></div>
+     <div class="field"><label for="digits">数字至少</label><input id="digits" type="number" min="0" max="32" value="2"></div><div class="field"><label for="lower">小写至少</label><input id="lower" type="number" min="0" max="32" value="2"></div>
+     <div class="field"><label for="upper">大写至少</label><input id="upper" type="number" min="0" max="32" value="2"></div><div class="field"><label for="symbols">符号至少</label><input id="symbols" type="number" min="0" max="32" value="1"></div>
+     <div class="field wide"><label for="excluded">排除字符</label><input id="excluded" type="text" value="0OIl" maxlength="256"></div>
+     <label class="check wide"><input id="same" type="checkbox">本批次账户使用相同密码</label>
+     <label class="check wide"><input id="prefix" type="checkbox">增加三位数字批次前缀（额外增加 3 位）</label>
+    </div>
+    <p class="rule-hint">同一账户的多个主机档案只执行一次。私钥、SSH Agent、键盘交互及自动认证主机不参与改密。</p>
+    <details id="recoveryOnly" class="recovery-only" hidden>
+     <summary id="recoverySummary">待确认账户</summary>
+     <p>这些账户已改为非密码认证，仅处理此前未确认的结果，不会加入本次改密。</p>
+     <div class="recovery-row"><label class="filter" for="recoveryAccount">待确认账户<select id="recoveryAccount"></select></label><button id="recoverOther" disabled>验证待确认</button></div>
+    </details>
+   </section>
+  </div>
+ </div>
+ <div class="feedback"><div id="notice" role="status" aria-live="polite"></div><div id="results" aria-live="polite"></div></div>
+ <footer class="footer">
+  <button id="start" class="primary" disabled>修改选中账户</button><button id="cancel" disabled>停止后续账户</button><span class="spacer"></span><label class="check"><input id="includePasswords" type="checkbox">导出密码</label><button id="export" disabled>导出结果</button>
+  <p class="footer-note">每次执行前确认账户并验证 Vault。关闭窗口不停止任务，需要停止时请使用“停止后续账户”。</p>
+ </footer>
+</main>
+<script>
+const $ = id => document.getElementById(id)
+const token = (location.hash.match(/issh-channel=([0-9a-f]+)/) || [])[1] || ''
+let sequence = 0, profiles = [], groups = [], recoveryProfiles = [], selected = new Map(), jobId = null, busy = false, cancellable = false, pollTimer = null
+let vaultUnlocked = false, refreshing = false, unlocking = false, generation = 0
+let listReady = false, emptyMessage = '正在读取密码认证主机…'
+let groupById = new Map(), groupLabels = new Map()
+const calls = new Map()
+function call(method, args = {}, timeoutMs = 120000) {
+ return new Promise((resolve,reject) => {
+  const id = `host-password-${++sequence}`
+  const timer = setTimeout(() => { calls.delete(id); reject(new Error('请求超时，请刷新状态后再操作')) },timeoutMs + 1000)
+  calls.set(id,{resolve,reject,timer})
+  parent.postMessage({channel:'issh-plugin-rpc',id,method:'gateway.request',params:{method,args,timeoutMs},token},'*')
+ })
+}
+addEventListener('message', event => {
+ if(event.source !== parent || !event.data || event.data.channel !== 'issh-plugin-rpc') return
+ const entry = calls.get(event.data.id); if(!entry) return
+ calls.delete(event.data.id); clearTimeout(entry.timer)
+ if(event.data.ok) entry.resolve(event.data.result); else entry.reject(new Error(event.data.error || '请求失败'))
+})
+addEventListener('message', event => {
+ if(event.source !== parent || !event.data || event.data.channel !== 'issh-plugin-theme') return
+ const {colorScheme} = event.data
+ if(colorScheme !== 'dark' && colorScheme !== 'light' && colorScheme !== 'auto') return
+ const root = document.documentElement
+ root.dataset.colorScheme = colorScheme
+ root.style.colorScheme = colorScheme === 'auto' ? 'light dark' : colorScheme
+})
+addEventListener('message', event => {
+ if(event.source !== parent || !event.data || event.data.channel !== 'issh-plugin-host-state-changed') return
+ action(refresh)
+})
+function notice(message,error=false){ $('notice').textContent=message; $('notice').classList.toggle('error',error) }
+function vaultReady(){ return vaultUnlocked && !refreshing && !unlocking }
+function accountKey(profile){ return JSON.stringify([profile.user,profile.host,profile.port]) }
+function uniqueAccounts(items){
+ const seen = new Set()
+ return items.filter(profile => { const key=accountKey(profile); if(seen.has(key))return false; seen.add(key); return true })
+}
+function matchesGroup(profile, value){
+ if(value === 'all')return true
+ if(value === 'ungrouped')return !groupById.has(profile.group)
+ if(!value.startsWith('group:'))return false
+ const id=value.slice(6), visited=new Set()
+ let current=groupById.get(profile.group)
+ while(current && !visited.has(current.id)){
+  if(current.id===id)return true
+  visited.add(current.id); current=groupById.get(current.parentGroupId)
+ }
+ return false
+}
+function buildGroupOptions(){
+ const previous=$('group').value, children=new Map(), roots=[], ordered=[], visited=new Set()
+ groupById=new Map(groups.map(group=>[group.id,group])); groupLabels=new Map()
+ for(const group of groupById.values()){
+  if(!group.parentGroupId || group.parentGroupId===group.id || !groupById.has(group.parentGroupId))roots.push(group)
+  else { const siblings=children.get(group.parentGroupId)||[]; siblings.push(group); children.set(group.parentGroupId,siblings) }
+ }
+ function visit(group,path){
+  if(visited.has(group.id))return
+  visited.add(group.id)
+  const names=[...path,group.name]; groupLabels.set(group.id,names.join(' › ')); ordered.push(group)
+  for(const child of children.get(group.id)||[])visit(child,names)
+ }
+ roots.forEach(group=>visit(group,[])); groupById.forEach(group=>visit(group,[]))
+ const select=$('group'); select.replaceChildren()
+ function option(value,label){
+  const item=document.createElement('option'); item.value=value
+  item.textContent=`${label}（${uniqueAccounts(profiles.filter(profile=>matchesGroup(profile,value))).length}）`
+  select.append(item)
+ }
+ option('all','全部分组'); option('ungrouped','未分组')
+ ordered.forEach(group=>option(`group:${group.id}`,groupLabels.get(group.id)))
+ select.value=[...select.options].some(item=>item.value===previous)?previous:'all'
+}
+function visibleProfiles(){
+ const q=$('search').value.trim().toLowerCase(), group=$('group').value
+ return uniqueAccounts(profiles.filter(profile=>matchesGroup(profile,group) && `${profile.name} ${profile.host} ${profile.user}`.toLowerCase().includes(q)))
+}
+function clearHistory(){ $('history').replaceChildren() }
+function rowElement(profile){
+ const key=accountKey(profile), row=document.createElement('label'); row.className='account'; row.classList.toggle('selected',selected.has(key)); row.dataset.profileId=profile.id
+ const checkbox=document.createElement('input'); checkbox.type='checkbox'; checkbox.checked=selected.has(key); checkbox.setAttribute('aria-label',`选择 ${profile.name} ${profile.user}@${profile.host}`)
+ checkbox.onchange=()=>{ if(checkbox.checked)selected.set(key,profile.id);else selected.delete(key); row.classList.toggle('selected',checkbox.checked);clearHistory();updateCount() }
+ const info=document.createElement('span'); info.className='account-info'
+ const title=document.createElement('span'); title.className='account-title'
+ const name=document.createElement('strong'); name.textContent=profile.name || profile.host; name.title=name.textContent
+ const group=document.createElement('span'); group.className='group-path'; group.textContent=groupLabels.get(profile.group)||'未分组'; group.title=group.textContent
+ const host=document.createElement('span'); host.className='host'; host.textContent=`${profile.user}@${profile.host}:${profile.port}`; host.title=host.textContent
+ const state=document.createElement('span'); state.className='badge'+(profile.pending?' pending':''); state.textContent=profile.pending?'待确认':profile.hasPassword?'已保存密码':'无密码'
+ title.append(name,group);info.append(title,host);row.append(checkbox,info,state);return row
+}
+function updateCount(){
+ const shown=visibleProfiles(), count=shown.filter(profile=>selected.has(accountKey(profile))).length, blocked=!vaultReady()
+ $('selectedCount').textContent=`已选 ${selected.size} 个账户 · 跨分组保留`
+ $('scopeCount').textContent=`当前 ${shown.length} 个账户`
+ $('all').checked=shown.length>0 && count===shown.length
+ $('all').indeterminate=count>0 && count<shown.length
+ document.querySelectorAll('#group,#search,#accounts input,.controls input,.controls select,#includePasswords').forEach(control=>{control.disabled=blocked})
+ $('unlock').disabled=refreshing || unlocking
+ $('refresh').disabled=refreshing || unlocking
+ $('all').disabled=blocked || !shown.length
+ $('start').disabled=blocked || busy || !listReady || !selected.size
+ $('historyBtn').disabled=blocked || selected.size!==1
+ $('recover').disabled=blocked || busy || selected.size!==1
+ $('recoverOther').disabled=blocked || busy || !recoveryProfiles.length
+ $('recoveryAccount').disabled=blocked || busy || !recoveryProfiles.length
+ $('clearSelection').disabled=blocked || !selected.size
+ $('export').disabled=blocked || !selected.size
+ $('cancel').disabled=blocked || !busy || !cancellable
+}
+function render(){
+ const list=$('accounts'), shown=visibleProfiles(); list.replaceChildren()
+ if(!shown.length){const empty=document.createElement('div');empty.className='muted';empty.textContent=profiles.length?'当前分组和搜索条件下没有匹配的密码认证账户。':emptyMessage;list.append(empty)}
+ else shown.forEach(profile=>list.append(rowElement(profile)))
+ updateCount()
+}
+function renderRecoveryProfiles(){
+ const select=$('recoveryAccount'), previous=select.value
+ select.replaceChildren()
+ for(const profile of recoveryProfiles){
+  const option=document.createElement('option');option.value=profile.id
+  option.textContent=`${profile.name || profile.host} · ${profile.user}@${profile.host}:${profile.port}`
+  select.append(option)
+ }
+ if(recoveryProfiles.some(profile=>profile.id===previous))select.value=previous
+ $('recoveryOnly').hidden=!recoveryProfiles.length
+ $('recoverySummary').textContent=`待确认账户（${recoveryProfiles.length}）`
+}
+async function refresh(){
+ const current=++generation
+ vaultUnlocked=false;refreshing=true;listReady=false
+ notice('正在确认 Vault 状态…');updateCount()
+ try{
+  const result=await call('hostPassword.list')
+  if(current!==generation)return false
+  vaultUnlocked=result.encrypted===true && result.unlocked===true
+  const incoming=Array.isArray(result.profiles)?result.profiles:[]
+  listReady=vaultUnlocked && Array.isArray(result.groups) && (!incoming.length || incoming.some(profile=>typeof profile.auth==='string'))
+  groups=vaultUnlocked && Array.isArray(result.groups)?result.groups.filter(group=>typeof group.id==='string' && typeof group.name==='string'):[]
+  profiles=listReady?incoming.filter(profile=>profile.auth==='password'):[]
+  const passwordKeys=new Set(profiles.map(accountKey))
+  recoveryProfiles=vaultUnlocked && Array.isArray(result.recoveryProfiles)?uniqueAccounts(result.recoveryProfiles.filter(profile=>typeof profile.id==='string' && typeof profile.user==='string' && !!profile.user && typeof profile.host==='string' && !!profile.host && Number.isInteger(profile.port) && profile.port>0 && !passwordKeys.has(accountKey(profile)))):[]
+  selected=new Map([...selected].filter(([key,id])=>profiles.some(profile=>profile.id===id && accountKey(profile)===key)))
+  if(!vaultUnlocked){$('includePasswords').checked=false;clearHistory()}
+  $('compatibilityHint').textContent=!listReady && vaultUnlocked?'当前宿主版本未提供分组和认证信息，请更新宿主后再使用批量改密。':''
+  emptyMessage=result.encrypted!==true?'请先在保险库设置中启用 Vault 主口令。':!vaultUnlocked?'请先解锁 Vault 后读取密码认证主机。':!listReady?'当前宿主版本不支持安全筛选改密账户。':'没有使用密码认证的主机。请在主机设置中将目标认证方式设为“密码”。'
+  buildGroupOptions();renderRecoveryProfiles();render()
+  notice(vaultUnlocked?'':emptyMessage)
+  return vaultUnlocked
+ }catch(error){
+  if(current!==generation)return false
+  vaultUnlocked=false;listReady=false;groups=[];profiles=[];recoveryProfiles=[];selected.clear()
+  $('includePasswords').checked=false;clearHistory();$('compatibilityHint').textContent=''
+  emptyMessage='无法确认 Vault 状态，请刷新或解锁 Vault 后重试。'
+  buildGroupOptions();renderRecoveryProfiles();render()
+  notice(`${emptyMessage} ${error.message}`,true)
+  return false
+ }finally{
+  if(current===generation){refreshing=false;updateCount()}
+ }
+}
+function policy(){return {length:Number($('length').value),minimum:['digits','lower','upper','symbols'].map(id=>Number($(id).value)),excluded:$('excluded').value,maxRepeat:Number($('repeat').value),samePassword:$('same').checked,batchPrefix:$('prefix').checked}}
+function setBusy(value, canCancel=false){busy=value;cancellable=value && canCancel;updateCount()}
+function showJob(job){
+ const target=$('results'); target.replaceChildren()
+ for(const row of job.rows){ const item=document.createElement('div'); item.className='result '+row.status; item.textContent=`${row.user}@${row.host}：${({queued:'等待',running:'处理中',success:'修改成功',failed:'未完成',pending:'待确认',cancelled:'已取消'})[row.status] || row.status}${row.message?' · '+row.message:''}`;target.append(item) }
+ const counts=job.rows.reduce((a,row)=>(a[row.status]=(a[row.status]||0)+1,a),{})
+ if(vaultReady())notice(job.done?`完成：成功 ${counts.success||0}，未完成 ${counts.failed||0}，待确认 ${counts.pending||0}，取消 ${counts.cancelled||0}`:`处理中：${job.rows.filter(row=>row.status!=='queued').length}/${job.rows.length}`)
+}
+async function poll(){
+ if(!jobId)return
+ try{const job=await call('hostPassword.status',{jobId},10000);showJob(job);if(job.done){setBusy(false);await refresh();showJob(job);return}pollTimer=setTimeout(poll,1000)}
+ catch(error){setBusy(false);if(vaultReady())notice(error.message,true)}
+}
+async function action(fn){try{await fn()}catch(error){if(vaultReady())notice(error.message,true)}}
+$('refresh').onclick=()=>action(refresh)
+$('unlock').onclick=async()=>{
+ if(refreshing || unlocking)return
+ unlocking=true;vaultUnlocked=false;updateCount();notice('请在主窗口解锁 Vault')
+ try{
+  await call('hostPassword.unlock')
+  if(await refresh())notice('Vault 已解锁')
+ }catch(error){if(!refreshing)notice(vaultUnlocked?error.message:`Vault 未解锁：${error.message}`,true)}
+ finally{unlocking=false;updateCount()}
+}
+$('search').oninput=render
+$('group').onchange=render
+$('all').onchange=()=>{
+ const checked=$('all').checked
+ for(const profile of visibleProfiles()){const key=accountKey(profile);if(checked){if(!selected.has(key))selected.set(key,profile.id)}else selected.delete(key)}
+ clearHistory();render()
+}
+$('clearSelection').onclick=()=>{selected.clear();clearHistory();render()}
+$('start').onclick=()=>action(async()=>{if(!vaultReady() || busy || !listReady)return;if(!selected.size)throw Error('请先选择账户');setBusy(true);try{notice('请在主窗口确认账户并验证 Vault');const job=await call('hostPassword.start',{profileIds:[...selected.values()],policy:policy()});jobId=job.jobId;setBusy(true,true);await poll()}catch(error){setBusy(false);throw error}})
+$('cancel').onclick=()=>action(async()=>{if(!vaultReady() || !busy || !cancellable)return;if(jobId){await call('hostPassword.cancel',{jobId});if(vaultReady())notice('已停止后续账户，正在处理的账户会安全收尾')}})
+async function recoverProfile(profileId){
+ if(!vaultReady() || busy)return
+ setBusy(true)
+ try{
+  notice('请在主窗口确认并验证 Vault')
+  const result=await call('hostPassword.recover',{profileId})
+  if(await refresh() && vaultReady())notice(({success:'新密码已验证并保存',oldConfirmed:'原密码已验证，候选密码已清除',pending:'仍无法确认密码，请稍后处理'})[result.status] || '处理完成')
+ }finally{setBusy(false)}
+}
+$('recover').onclick=()=>action(async()=>{if(!vaultReady())return;if(selected.size!==1)throw Error('请选择一个待确认账户');await recoverProfile([...selected.values()][0])})
+$('recoverOther').onclick=()=>action(async()=>{if(!vaultReady())return;const id=$('recoveryAccount').value;if(!recoveryProfiles.some(profile=>profile.id===id))throw Error('请选择一个待确认账户');await recoverProfile(id)})
+$('historyBtn').onclick=()=>action(async()=>{if(!vaultReady())return;if(selected.size!==1)throw Error('请选择一个账户查看记录');const current=generation;const result=await call('hostPassword.history',{profileId:[...selected.values()][0]});if(current!==generation || !vaultReady())return;const last=result.lastAttempt;const latest=last&&last.status!=='success'?`最近尝试：${new Date(last.at).toLocaleString()} · ${last.status==='pending'?'待确认':'未完成'}。 `:'';$('history').textContent=latest+(result.records.length?result.records.map(record=>`${new Date(record.changedAt).toLocaleString()} · 修改成功`).join('  |  '):'该账户尚无成功改密记录。')})
+$('export').onclick=()=>action(async()=>{if(!vaultReady())return;if(!selected.size)throw Error('请选择要导出的账户');const args={profileIds:[...selected.values()],includePasswords:$('includePasswords').checked};if(jobId)args.jobId=jobId;const result=await call('hostPassword.export',args);if(vaultReady())notice(result.saved?'结果已保存':'已取消导出')})
+addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();parent.postMessage({channel:'issh-plugin-panel',action:'close',token},'*')}})
+addEventListener('beforeunload',()=>{clearTimeout(pollTimer)})
+updateCount()
+action(refresh)
+</script>
+</body>
+</html>

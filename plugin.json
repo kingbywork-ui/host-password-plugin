@@ -1,0 +1,16 @@
+{
+  "id": "issh-plugin-host-password",
+  "name": "批量修改主机密码",
+  "description": "手动批量修改托管 SSH 账户密码，查看最近记录并导出结果",
+  "version": "0.1.2",
+  "kind": "feature",
+  "minAppVersion": "0.1.8",
+  "entry": "index.js",
+  "sandboxEntry": "sandbox.html",
+  "sandboxPlacement": "modal",
+  "executionMode": "sandbox",
+  "gatewayApiVersion": "1",
+  "permissions": ["panel:register", "hostPassword.rotate"],
+  "capabilities": ["ui.panel.register", "hostPassword.rotate"],
+  "author": "issh"
+}
