@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>批量修改主机密码</title>
+<title>主机认证管理</title>
 <style>
 :root {
  color-scheme:dark;
@@ -63,6 +63,11 @@
  }
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
+.mode-picker{display:flex;align-items:center;gap:8px;flex:none;color:var(--muted)}
+.mode-picker select{width:auto}
+.key-info{padding:12px;color:var(--muted);line-height:1.7}
+.key-info p{margin:0 0 12px}
 html,body{width:100%;height:100%;min-width:0;margin:0;overflow:hidden}
 body{font-family:inherit;line-height:1.45;color:var(--fg);background:transparent}
 button,input,select{font:inherit}
@@ -168,9 +173,10 @@ input:disabled,select:disabled{opacity:.55;color:var(--muted);cursor:not-allowed
 <body>
 <main class="shell">
  <header class="heading">
-  <div class="intro"><h1>选择改密账户</h1><p>仅显示密码认证主机 · 密码保存在 Vault</p></div>
+  <div class="intro"><h1 id="heading">选择改密账户</h1><p id="intro">仅显示密码认证主机 · 密码保存在 Vault</p></div>
   <span class="spacer"></span><button id="unlock">解锁 Vault</button><button id="refresh">刷新</button>
  </header>
+ <label class="mode-picker" for="mode">操作模式<select id="mode"><option value="password">批量改密</option><option value="generate">生成密钥</option><option value="rotate">轮换密钥</option></select></label>
  <div class="workspace">
   <div class="layout">
    <section class="box account-box" aria-label="托管主机账户">
@@ -185,7 +191,8 @@ input:disabled,select:disabled{opacity:.55;color:var(--muted);cursor:not-allowed
     <div class="account-actions"><span id="selectedCount">已选 0 个账户 · 跨分组保留</span><button id="historyBtn">查看记录</button><button id="recover">处理待确认</button><button id="clearSelection">清空选择</button></div>
     <div id="history" aria-live="polite"></div>
    </section>
-   <section class="box rules-box" aria-label="密码规则">
+   <section class="box rules-box" aria-label="操作说明">
+    <div id="passwordRules">
     <div class="bar"><strong>密码规则</strong></div>
     <div class="controls">
      <div class="field"><label for="length">密码长度</label><input id="length" type="number" min="6" max="32" value="16"></div><div class="field"><label for="repeat">重复上限</label><input id="repeat" type="number" min="1" max="32" value="3"></div>
@@ -196,9 +203,11 @@ input:disabled,select:disabled{opacity:.55;color:var(--muted);cursor:not-allowed
      <label class="check wide"><input id="prefix" type="checkbox">增加三位数字批次前缀（额外增加 3 位）</label>
     </div>
     <p class="rule-hint">同一账户的多个主机档案只执行一次。私钥、SSH Agent、键盘交互及自动认证主机不参与改密。</p>
+    </div>
+    <div id="keyInfo" hidden><div class="bar"><strong id="keyTitle">生成密钥</strong></div><div class="key-info"><p>每台主机使用独立密钥，私钥由宿主管理，不会发送到插件面板，也不提供私钥导出。</p><p>先验证新密钥可登录，再切换本工具的认证方式。保留其他授权密钥，不禁用服务器密码登录。</p><p id="keyOperationHint"></p><p>连接中断或保存失败时可能需要“处理待确认”。请先恢复待确认结果，再发起新的操作。</p></div></div>
     <details id="recoveryOnly" class="recovery-only" hidden>
      <summary id="recoverySummary">待确认账户</summary>
-     <p>这些账户已改为非密码认证，仅处理此前未确认的结果，不会加入本次改密。</p>
+     <p id="recoveryHint">这些账户已改为非密码认证，仅处理此前未确认的结果，不会加入本次改密。</p>
      <div class="recovery-row"><label class="filter" for="recoveryAccount">待确认账户<select id="recoveryAccount"></select></label><button id="recoverOther" disabled>验证待确认</button></div>
     </details>
    </section>
@@ -206,7 +215,7 @@ input:disabled,select:disabled{opacity:.55;color:var(--muted);cursor:not-allowed
  </div>
  <div class="feedback"><div id="notice" role="status" aria-live="polite"></div><div id="results" aria-live="polite"></div></div>
  <footer class="footer">
-  <button id="start" class="primary" disabled>修改选中账户</button><button id="cancel" disabled>停止后续账户</button><span class="spacer"></span><label class="check"><input id="includePasswords" type="checkbox">导出密码</label><button id="export" disabled>导出结果</button>
+  <button id="start" class="primary" disabled>修改选中账户</button><button id="cancel" disabled>停止后续账户</button><span class="spacer"></span><label id="passwordExport" class="check"><input id="includePasswords" type="checkbox">导出密码</label><button id="export" disabled>导出结果</button>
   <p class="footer-note">每次执行前确认账户并验证 Vault。关闭窗口不停止任务，需要停止时请使用“停止后续账户”。</p>
  </footer>
 </main>
@@ -217,6 +226,31 @@ let sequence = 0, profiles = [], groups = [], recoveryProfiles = [], selected = 
 let vaultUnlocked = false, refreshing = false, unlocking = false, generation = 0
 let listReady = false, emptyMessage = '正在读取密码认证主机…'
 let groupById = new Map(), groupLabels = new Map()
+let mode = 'password', operationEpoch = 0
+const isKeyMode = () => mode !== 'password'
+const api = () => isKeyMode() ? 'hostKey' : 'hostPassword'
+const targetAuth = () => mode === 'rotate' ? 'publicKey' : 'password'
+function operationError(error){ return isKeyMode() ? `密钥操作失败：${error.message}。请确认宿主和 Runtime 均支持 hostKey 接口；旧版本需更新后使用。` : error.message }
+function updateMode(){
+ const key=isKeyMode(), title=mode==='rotate'?'轮换密钥':'生成密钥'
+ $('passwordRules').hidden=key; $('keyInfo').hidden=!key
+ for(const id of ['historyBtn','history','passwordExport','export'])$(id).hidden=key
+ $('heading').textContent=key?`选择${title}主机`:'选择改密账户'
+ $('intro').textContent=key?`仅显示${mode==='rotate'?'私钥':'密码'}认证主机 · 每主机独立密钥`:'仅显示密码认证主机 · 密码保存在 Vault'
+ $('keyTitle').textContent=title; $('start').textContent=key?`${title}并切换认证`:'修改选中账户'
+ $('keyOperationHint').textContent=mode==='rotate'?'使用现有私钥登录，验证新密钥后轮换本工具管理的密钥。':'使用已保存密码登录，验证新密钥后将本工具认证切换为私钥。'
+ $('recoveryHint').textContent=key?'这些主机不属于当前认证筛选，仅恢复未确认的密钥操作，不加入新任务。':'这些账户已改为非密码认证，仅处理此前未确认的结果，不会加入本次改密。'
+}
+async function changeMode(){
+ const next=$('mode').value
+ if(busy || unlocking || !['password','generate','rotate'].includes(next)){ $('mode').value=mode;return }
+ if(next===mode)return
+ ++operationEpoch; ++generation; clearTimeout(pollTimer); pollTimer=null; jobId=null
+ mode=next; selected.clear();profiles=[];groups=[];recoveryProfiles=[]
+ $('includePasswords').checked=false;clearHistory();$('results').replaceChildren()
+ $('search').value='';$('group').value='all';updateMode()
+ await refresh()
+}
 const calls = new Map()
 function call(method, args = {}, timeoutMs = 120000) {
  return new Promise((resolve,reject) => {
@@ -246,7 +280,7 @@ addEventListener('message', event => {
 })
 function notice(message,error=false){ $('notice').textContent=message; $('notice').classList.toggle('error',error) }
 function vaultReady(){ return vaultUnlocked && !refreshing && !unlocking }
-function accountKey(profile){ return JSON.stringify([profile.user,profile.host,profile.port]) }
+function accountKey(profile){ return isKeyMode()?profile.id:JSON.stringify([profile.user,profile.host,profile.port]) }
 function uniqueAccounts(items){
  const seen = new Set()
  return items.filter(profile => { const key=accountKey(profile); if(seen.has(key))return false; seen.add(key); return true })
@@ -301,7 +335,7 @@ function rowElement(profile){
  const name=document.createElement('strong'); name.textContent=profile.name || profile.host; name.title=name.textContent
  const group=document.createElement('span'); group.className='group-path'; group.textContent=groupLabels.get(profile.group)||'未分组'; group.title=group.textContent
  const host=document.createElement('span'); host.className='host'; host.textContent=`${profile.user}@${profile.host}:${profile.port}`; host.title=host.textContent
- const state=document.createElement('span'); state.className='badge'+(profile.pending?' pending':''); state.textContent=profile.pending?'待确认':profile.hasPassword?'已保存密码':'无密码'
+ const state=document.createElement('span'); state.className='badge'+(profile.pending?' pending':''); state.textContent=profile.pending?'待确认':mode==='rotate'?(profile.hasPrivateKey?'已保存私钥':'无私钥'):profile.hasPassword?'已保存密码':'无密码'
  title.append(name,group);info.append(title,host);row.append(checkbox,info,state);return row
 }
 function updateCount(){
@@ -311,21 +345,22 @@ function updateCount(){
  $('all').checked=shown.length>0 && count===shown.length
  $('all').indeterminate=count>0 && count<shown.length
  document.querySelectorAll('#group,#search,#accounts input,.controls input,.controls select,#includePasswords').forEach(control=>{control.disabled=blocked})
+ $('mode').disabled=busy || unlocking
  $('unlock').disabled=refreshing || unlocking
  $('refresh').disabled=refreshing || unlocking
  $('all').disabled=blocked || !shown.length
- $('start').disabled=blocked || busy || !listReady || !selected.size
- $('historyBtn').disabled=blocked || selected.size!==1
+ $('start').disabled=blocked || busy || !listReady || !selected.size || (isKeyMode() && profiles.some(p=>selected.has(accountKey(p)) && p.pending))
+ $('historyBtn').disabled=isKeyMode() || blocked || selected.size!==1
  $('recover').disabled=blocked || busy || selected.size!==1
  $('recoverOther').disabled=blocked || busy || !recoveryProfiles.length
  $('recoveryAccount').disabled=blocked || busy || !recoveryProfiles.length
  $('clearSelection').disabled=blocked || !selected.size
- $('export').disabled=blocked || !selected.size
+ $('export').disabled=isKeyMode() || blocked || !selected.size
  $('cancel').disabled=blocked || !busy || !cancellable
 }
 function render(){
  const list=$('accounts'), shown=visibleProfiles(); list.replaceChildren()
- if(!shown.length){const empty=document.createElement('div');empty.className='muted';empty.textContent=profiles.length?'当前分组和搜索条件下没有匹配的密码认证账户。':emptyMessage;list.append(empty)}
+ if(!shown.length){const empty=document.createElement('div');empty.className='muted';empty.textContent=profiles.length?'当前分组和搜索条件下没有匹配的账户。':emptyMessage;list.append(empty)}
  else shown.forEach(profile=>list.append(rowElement(profile)))
  updateCount()
 }
@@ -346,19 +381,21 @@ async function refresh(){
  vaultUnlocked=false;refreshing=true;listReady=false
  notice('正在确认 Vault 状态…');updateCount()
  try{
-  const result=await call('hostPassword.list')
+  const result=await call(`${api()}.list`)
+  if(!result || !Array.isArray(result.profiles) || (isKeyMode() && !Array.isArray(result.groups)))throw Error('宿主返回的账户列表不符合接口契约')
   if(current!==generation)return false
   vaultUnlocked=result.encrypted===true && result.unlocked===true
   const incoming=Array.isArray(result.profiles)?result.profiles:[]
   listReady=vaultUnlocked && Array.isArray(result.groups) && (!incoming.length || incoming.some(profile=>typeof profile.auth==='string'))
   groups=vaultUnlocked && Array.isArray(result.groups)?result.groups.filter(group=>typeof group.id==='string' && typeof group.name==='string'):[]
-  profiles=listReady?incoming.filter(profile=>profile.auth==='password'):[]
+  profiles=listReady?incoming.filter(profile=>profile.auth===targetAuth()):[]
   const passwordKeys=new Set(profiles.map(accountKey))
-  recoveryProfiles=vaultUnlocked && Array.isArray(result.recoveryProfiles)?uniqueAccounts(result.recoveryProfiles.filter(profile=>typeof profile.id==='string' && typeof profile.user==='string' && !!profile.user && typeof profile.host==='string' && !!profile.host && Number.isInteger(profile.port) && profile.port>0 && !passwordKeys.has(accountKey(profile)))):[]
+  const recoverySource=isKeyMode()?incoming.filter(profile=>profile.pending):result.recoveryProfiles
+  recoveryProfiles=vaultUnlocked && Array.isArray(recoverySource)?uniqueAccounts(recoverySource.filter(profile=>typeof profile.id==='string' && typeof profile.user==='string' && !!profile.user && typeof profile.host==='string' && !!profile.host && Number.isInteger(profile.port) && profile.port>0 && !passwordKeys.has(accountKey(profile)))):[]
   selected=new Map([...selected].filter(([key,id])=>profiles.some(profile=>profile.id===id && accountKey(profile)===key)))
   if(!vaultUnlocked){$('includePasswords').checked=false;clearHistory()}
-  $('compatibilityHint').textContent=!listReady && vaultUnlocked?'当前宿主版本未提供分组和认证信息，请更新宿主后再使用批量改密。':''
-  emptyMessage=result.encrypted!==true?'请先在保险库设置中启用 Vault 主口令。':!vaultUnlocked?'请先解锁 Vault 后读取密码认证主机。':!listReady?'当前宿主版本不支持安全筛选改密账户。':'没有使用密码认证的主机。请在主机设置中将目标认证方式设为“密码”。'
+  $('compatibilityHint').textContent=!listReady && vaultUnlocked?'当前宿主版本未提供分组和认证信息，请更新宿主后再使用。':''
+  emptyMessage=result.encrypted!==true?'请先在保险库设置中启用 Vault 主口令。':!vaultUnlocked?'请先解锁 Vault 后读取主机。':!listReady?'当前宿主版本不支持安全筛选账户。':mode==='rotate'?'没有使用私钥认证的主机。':isKeyMode()?'没有使用密码认证的主机。':'没有使用密码认证的主机。请在主机设置中将目标认证方式设为“密码”。'
   buildGroupOptions();renderRecoveryProfiles();render()
   notice(vaultUnlocked?'':emptyMessage)
   return vaultUnlocked
@@ -366,9 +403,9 @@ async function refresh(){
   if(current!==generation)return false
   vaultUnlocked=false;listReady=false;groups=[];profiles=[];recoveryProfiles=[];selected.clear()
   $('includePasswords').checked=false;clearHistory();$('compatibilityHint').textContent=''
-  emptyMessage='无法确认 Vault 状态，请刷新或解锁 Vault 后重试。'
+  emptyMessage=isKeyMode()?'无法读取密钥操作目标，请刷新或更新宿主后重试。':'无法确认 Vault 状态，请刷新或解锁 Vault 后重试。'
   buildGroupOptions();renderRecoveryProfiles();render()
-  notice(`${emptyMessage} ${error.message}`,true)
+  notice(`${emptyMessage} ${operationError(error)}`,true)
   return false
  }finally{
   if(current===generation){refreshing=false;updateCount()}
@@ -378,16 +415,32 @@ function policy(){return {length:Number($('length').value),minimum:['digits','lo
 function setBusy(value, canCancel=false){busy=value;cancellable=value && canCancel;updateCount()}
 function showJob(job){
  const target=$('results'); target.replaceChildren()
- for(const row of job.rows){ const item=document.createElement('div'); item.className='result '+row.status; item.textContent=`${row.user}@${row.host}：${({queued:'等待',running:'处理中',success:'修改成功',failed:'未完成',pending:'待确认',cancelled:'已取消'})[row.status] || row.status}${row.message?' · '+row.message:''}`;target.append(item) }
+ const labels=isKeyMode()?{queued:'等待',running:'处理中',success:'操作成功',failed:'未完成',pending:'待确认',cancelled:'已取消'}:{queued:'等待',running:'处理中',success:'修改成功',failed:'未完成',pending:'待确认',cancelled:'已取消'}
+ for(const row of job.rows){ const item=document.createElement('div'); item.className='result '+row.status; item.textContent=`${row.user}@${row.host}：${labels[row.status] || row.status}${row.message?' · '+row.message:''}`;target.append(item) }
  const counts=job.rows.reduce((a,row)=>(a[row.status]=(a[row.status]||0)+1,a),{})
  if(vaultReady())notice(job.done?`完成：成功 ${counts.success||0}，未完成 ${counts.failed||0}，待确认 ${counts.pending||0}，取消 ${counts.cancelled||0}`:`处理中：${job.rows.filter(row=>row.status!=='queued').length}/${job.rows.length}`)
 }
-async function poll(){
- if(!jobId)return
- try{const job=await call('hostPassword.status',{jobId},10000);showJob(job);if(job.done){setBusy(false);await refresh();showJob(job);return}pollTimer=setTimeout(poll,1000)}
- catch(error){setBusy(false);if(vaultReady())notice(error.message,true)}
+function validateJob(job){
+ if(!job || !Array.isArray(job.rows) || typeof job.done!=='boolean')throw Error('宿主返回的任务状态不符合接口契约，未确认操作结果')
+ return job
 }
-async function action(fn){try{await fn()}catch(error){if(vaultReady())notice(error.message,true)}}
+async function poll(epoch=operationEpoch, id=jobId){
+ if(!id || epoch!==operationEpoch || id!==jobId)return
+ clearTimeout(pollTimer)
+ try{
+  const job=validateJob(await call(`${api()}.status`,{jobId:id},10000))
+  if(epoch!==operationEpoch || id!==jobId)return
+  showJob(job)
+  if(job.done){await refresh();if(epoch!==operationEpoch || id!==jobId)return;showJob(job);setBusy(false);return}
+ }catch(error){
+  if(epoch!==operationEpoch || id!==jobId)return
+  if(isKeyMode()){notice(`${operationError(error)} 正在重试查询；任务结果尚未确认，暂不能切换模式。`,true)}
+  else{setBusy(false);if(vaultReady())notice(error.message,true);return}
+ }
+ if(epoch===operationEpoch && id===jobId)pollTimer=setTimeout(()=>poll(epoch,id),1000)
+}
+async function action(fn){try{await fn()}catch(error){notice(operationError(error),true)}}
+$('mode').onchange=()=>action(changeMode)
 $('refresh').onclick=()=>action(refresh)
 $('unlock').onclick=async()=>{
  if(refreshing || unlocking)return
@@ -406,24 +459,38 @@ $('all').onchange=()=>{
  clearHistory();render()
 }
 $('clearSelection').onclick=()=>{selected.clear();clearHistory();render()}
-$('start').onclick=()=>action(async()=>{if(!vaultReady() || busy || !listReady)return;if(!selected.size)throw Error('请先选择账户');setBusy(true);try{notice('请在主窗口确认账户并验证 Vault');const job=await call('hostPassword.start',{profileIds:[...selected.values()],policy:policy()});jobId=job.jobId;setBusy(true,true);await poll()}catch(error){setBusy(false);throw error}})
-$('cancel').onclick=()=>action(async()=>{if(!vaultReady() || !busy || !cancellable)return;if(jobId){await call('hostPassword.cancel',{jobId});if(vaultReady())notice('已停止后续账户，正在处理的账户会安全收尾')}})
+$('start').onclick=()=>action(async()=>{
+ if(!vaultReady() || busy || !listReady)return
+ if(!selected.size)throw Error('请先选择账户')
+ if(isKeyMode() && profiles.some(p=>selected.has(accountKey(p)) && p.pending))throw Error('请先处理待确认的密钥操作')
+ setBusy(true);clearTimeout(pollTimer);jobId=null;$('results').replaceChildren()
+ try{
+  notice('请在主窗口确认账户并验证 Vault')
+  const args={profileIds:[...selected.values()],...(isKeyMode()?{operation:mode}:{policy:policy()})}
+  const job=await call(`${api()}.start`,args)
+  if(!job || typeof job.jobId!=='string' || !job.jobId)throw Error('宿主未返回任务 ID，无法确认操作结果；请刷新检查待确认状态')
+  jobId=job.jobId;setBusy(true,true);await poll()
+ }catch(error){setBusy(false);throw error}
+})
+$('cancel').onclick=()=>action(async()=>{if(!vaultReady() || !busy || !cancellable)return;if(jobId){await call(`${api()}.cancel`,{jobId});if(vaultReady())notice('已停止后续账户，正在处理的账户会安全收尾')}})
 async function recoverProfile(profileId){
  if(!vaultReady() || busy)return
  setBusy(true)
  try{
   notice('请在主窗口确认并验证 Vault')
-  const result=await call('hostPassword.recover',{profileId})
-  if(await refresh() && vaultReady())notice(({success:'新密码已验证并保存',oldConfirmed:'原密码已验证，候选密码已清除',pending:'仍无法确认密码，请稍后处理'})[result.status] || '处理完成')
+  const result=await call(`${api()}.recover`,{profileId})
+  const messages=isKeyMode()?{success:'新密钥已验证并切换认证',oldConfirmed:'原认证已验证，候选密钥已清除',pending:'仍无法确认密钥，请稍后处理'}:{success:'新密码已验证并保存',oldConfirmed:'原密码已验证，候选密码已清除',pending:'仍无法确认密码，请稍后处理'}
+  if(!result || !messages[result.status])throw Error('宿主返回的恢复状态不符合接口契约，未确认恢复结果')
+  if(await refresh() && vaultReady())notice(messages[result.status])
  }finally{setBusy(false)}
 }
 $('recover').onclick=()=>action(async()=>{if(!vaultReady())return;if(selected.size!==1)throw Error('请选择一个待确认账户');await recoverProfile([...selected.values()][0])})
 $('recoverOther').onclick=()=>action(async()=>{if(!vaultReady())return;const id=$('recoveryAccount').value;if(!recoveryProfiles.some(profile=>profile.id===id))throw Error('请选择一个待确认账户');await recoverProfile(id)})
-$('historyBtn').onclick=()=>action(async()=>{if(!vaultReady())return;if(selected.size!==1)throw Error('请选择一个账户查看记录');const current=generation;const result=await call('hostPassword.history',{profileId:[...selected.values()][0]});if(current!==generation || !vaultReady())return;const last=result.lastAttempt;const latest=last&&last.status!=='success'?`最近尝试：${new Date(last.at).toLocaleString()} · ${last.status==='pending'?'待确认':'未完成'}。 `:'';$('history').textContent=latest+(result.records.length?result.records.map(record=>`${new Date(record.changedAt).toLocaleString()} · 修改成功`).join('  |  '):'该账户尚无成功改密记录。')})
-$('export').onclick=()=>action(async()=>{if(!vaultReady())return;if(!selected.size)throw Error('请选择要导出的账户');const args={profileIds:[...selected.values()],includePasswords:$('includePasswords').checked};if(jobId)args.jobId=jobId;const result=await call('hostPassword.export',args);if(vaultReady())notice(result.saved?'结果已保存':'已取消导出')})
+$('historyBtn').onclick=()=>action(async()=>{if(isKeyMode() || !vaultReady())return;if(selected.size!==1)throw Error('请选择一个账户查看记录');const current=generation;const result=await call('hostPassword.history',{profileId:[...selected.values()][0]});if(current!==generation || !vaultReady())return;const last=result.lastAttempt;const latest=last&&last.status!=='success'?`最近尝试：${new Date(last.at).toLocaleString()} · ${last.status==='pending'?'待确认':'未完成'}。 `:'';$('history').textContent=latest+(result.records.length?result.records.map(record=>`${new Date(record.changedAt).toLocaleString()} · 修改成功`).join('  |  '):'该账户尚无成功改密记录。')})
+$('export').onclick=()=>action(async()=>{if(isKeyMode() || !vaultReady())return;if(!selected.size)throw Error('请选择要导出的账户');const args={profileIds:[...selected.values()],includePasswords:$('includePasswords').checked};if(jobId)args.jobId=jobId;const current=operationEpoch;const result=await call('hostPassword.export',args);if(current===operationEpoch && vaultReady())notice(result.saved?'结果已保存':'已取消导出')})
 addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();parent.postMessage({channel:'issh-plugin-panel',action:'close',token},'*')}})
-addEventListener('beforeunload',()=>{clearTimeout(pollTimer)})
-updateCount()
+addEventListener('beforeunload',()=>{++operationEpoch;clearTimeout(pollTimer)})
+updateMode();updateCount()
 action(refresh)
 </script>
 </body>
