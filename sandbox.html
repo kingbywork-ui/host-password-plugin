@@ -230,7 +230,11 @@ let mode = 'password', operationEpoch = 0
 const isKeyMode = () => mode !== 'password'
 const api = () => isKeyMode() ? 'hostKey' : 'hostPassword'
 const targetAuth = () => mode === 'rotate' ? 'publicKey' : 'password'
-function operationError(error){ return isKeyMode() ? `密钥操作失败：${error.message}。请确认宿主和 Runtime 均支持 hostKey 接口；旧版本需更新后使用。` : error.message }
+function operationError(error){
+ const message=error.message
+ const incompatible=/\b(?:unknown|unsupported|unrecognized)\s+(?:rpc\s+)?method\b|\bmethod\b[^\n]*(?:not found|not supported|unsupported)|不支持[^\n]*(?:hostKey\.|方法|接口)|未知方法/i.test(message)
+ return isKeyMode() && incompatible ? `${message}。请确认宿主和 Runtime 均支持 hostKey 接口；旧版本需更新后使用。` : message
+}
 function updateMode(){
  const key=isKeyMode(), title=mode==='rotate'?'轮换密钥':'生成密钥'
  $('passwordRules').hidden=key; $('keyInfo').hidden=!key
@@ -346,12 +350,13 @@ function updateCount(){
  $('all').indeterminate=count>0 && count<shown.length
  document.querySelectorAll('#group,#search,#accounts input,.controls input,.controls select,#includePasswords').forEach(control=>{control.disabled=blocked})
  $('mode').disabled=busy || unlocking
+ $('unlock').textContent=unlocking?'正在验证 Vault…':vaultUnlocked?'Vault 已验证':'解锁 Vault'
  $('unlock').disabled=refreshing || unlocking
  $('refresh').disabled=refreshing || unlocking
  $('all').disabled=blocked || !shown.length
  $('start').disabled=blocked || busy || !listReady || !selected.size || (isKeyMode() && profiles.some(p=>selected.has(accountKey(p)) && p.pending))
  $('historyBtn').disabled=isKeyMode() || blocked || selected.size!==1
- $('recover').disabled=blocked || busy || selected.size!==1
+ $('recover').disabled=blocked || busy || selected.size!==1 || !profiles.some(profile=>profile.id===[...selected.values()][0] && profile.pending===true)
  $('recoverOther').disabled=blocked || busy || !recoveryProfiles.length
  $('recoveryAccount').disabled=blocked || busy || !recoveryProfiles.length
  $('clearSelection').disabled=blocked || !selected.size
@@ -376,22 +381,30 @@ function renderRecoveryProfiles(){
  $('recoveryOnly').hidden=!recoveryProfiles.length
  $('recoverySummary').textContent=`待确认账户（${recoveryProfiles.length}）`
 }
+function clearVaultVerification(){
+ vaultUnlocked=false;listReady=false;groups=[];profiles=[];recoveryProfiles=[];selected.clear()
+ $('includePasswords').checked=false;clearHistory();$('results').replaceChildren();$('compatibilityHint').textContent=''
+ emptyMessage='请先点击“解锁 Vault”并完成本面板验证后读取主机。'
+ buildGroupOptions();renderRecoveryProfiles();render()
+}
 async function refresh(){
  const current=++generation
- vaultUnlocked=false;refreshing=true;listReady=false
+ if(!vaultUnlocked){refreshing=false;clearVaultVerification();notice(emptyMessage);return false}
+ refreshing=true;listReady=false
  notice('正在确认 Vault 状态…');updateCount()
  try{
   const result=await call(`${api()}.list`)
-  if(!result || !Array.isArray(result.profiles) || (isKeyMode() && !Array.isArray(result.groups)))throw Error('宿主返回的账户列表不符合接口契约')
   if(current!==generation)return false
-  vaultUnlocked=result.encrypted===true && result.unlocked===true
+  if(!result || !Array.isArray(result.profiles) || (isKeyMode() && !Array.isArray(result.groups)))throw Error('宿主返回的账户列表不符合接口契约')
+  if(result.encrypted!==true || result.unlocked!==true)clearVaultVerification()
   const incoming=Array.isArray(result.profiles)?result.profiles:[]
   listReady=vaultUnlocked && Array.isArray(result.groups) && (!incoming.length || incoming.some(profile=>typeof profile.auth==='string'))
   groups=vaultUnlocked && Array.isArray(result.groups)?result.groups.filter(group=>typeof group.id==='string' && typeof group.name==='string'):[]
   profiles=listReady?incoming.filter(profile=>profile.auth===targetAuth()):[]
   const passwordKeys=new Set(profiles.map(accountKey))
-  const recoverySource=isKeyMode()?incoming.filter(profile=>profile.pending):result.recoveryProfiles
-  recoveryProfiles=vaultUnlocked && Array.isArray(recoverySource)?uniqueAccounts(recoverySource.filter(profile=>typeof profile.id==='string' && typeof profile.user==='string' && !!profile.user && typeof profile.host==='string' && !!profile.host && Number.isInteger(profile.port) && profile.port>0 && !passwordKeys.has(accountKey(profile)))):[]
+  // Password recoveryProfiles is already a pending-only list; older hosts omit its flag.
+  const recoverySource=isKeyMode()?incoming.filter(profile=>profile.pending===true):result.recoveryProfiles?.map(profile=>({...profile,pending:profile.pending ?? true}))
+  recoveryProfiles=vaultUnlocked && Array.isArray(recoverySource)?uniqueAccounts(recoverySource.filter(profile=>profile.pending===true && typeof profile.id==='string' && typeof profile.user==='string' && !!profile.user && typeof profile.host==='string' && !!profile.host && Number.isInteger(profile.port) && profile.port>0 && !passwordKeys.has(accountKey(profile)))):[]
   selected=new Map([...selected].filter(([key,id])=>profiles.some(profile=>profile.id===id && accountKey(profile)===key)))
   if(!vaultUnlocked){$('includePasswords').checked=false;clearHistory()}
   $('compatibilityHint').textContent=!listReady && vaultUnlocked?'当前宿主版本未提供分组和认证信息，请更新宿主后再使用。':''
@@ -401,9 +414,8 @@ async function refresh(){
   return vaultUnlocked
  }catch(error){
   if(current!==generation)return false
-  vaultUnlocked=false;listReady=false;groups=[];profiles=[];recoveryProfiles=[];selected.clear()
-  $('includePasswords').checked=false;clearHistory();$('compatibilityHint').textContent=''
-  emptyMessage=isKeyMode()?'无法读取密钥操作目标，请刷新或更新宿主后重试。':'无法确认 Vault 状态，请刷新或解锁 Vault 后重试。'
+  clearVaultVerification()
+  emptyMessage='无法确认 Vault 状态，请重新解锁 Vault 后重试。'
   buildGroupOptions();renderRecoveryProfiles();render()
   notice(`${emptyMessage} ${operationError(error)}`,true)
   return false
@@ -414,6 +426,7 @@ async function refresh(){
 function policy(){return {length:Number($('length').value),minimum:['digits','lower','upper','symbols'].map(id=>Number($(id).value)),excluded:$('excluded').value,maxRepeat:Number($('repeat').value),samePassword:$('same').checked,batchPrefix:$('prefix').checked}}
 function setBusy(value, canCancel=false){busy=value;cancellable=value && canCancel;updateCount()}
 function showJob(job){
+ if(!vaultReady())return
  const target=$('results'); target.replaceChildren()
  const labels=isKeyMode()?{queued:'等待',running:'处理中',success:'操作成功',failed:'未完成',pending:'待确认',cancelled:'已取消'}:{queued:'等待',running:'处理中',success:'修改成功',failed:'未完成',pending:'待确认',cancelled:'已取消'}
  for(const row of job.rows){ const item=document.createElement('div'); item.className='result '+row.status; item.textContent=`${row.user}@${row.host}：${labels[row.status] || row.status}${row.message?' · '+row.message:''}`;target.append(item) }
@@ -427,6 +440,7 @@ function validateJob(job){
 async function poll(epoch=operationEpoch, id=jobId){
  if(!id || epoch!==operationEpoch || id!==jobId)return
  clearTimeout(pollTimer)
+ if(!vaultReady()){pollTimer=setTimeout(()=>poll(epoch,id),1000);return}
  try{
   const job=validateJob(await call(`${api()}.status`,{jobId:id},10000))
   if(epoch!==operationEpoch || id!==jobId)return
@@ -444,11 +458,13 @@ $('mode').onchange=()=>action(changeMode)
 $('refresh').onclick=()=>action(refresh)
 $('unlock').onclick=async()=>{
  if(refreshing || unlocking)return
- unlocking=true;vaultUnlocked=false;updateCount();notice('请在主窗口解锁 Vault')
+ unlocking=true;++generation;clearVaultVerification();updateCount();notice('请在主窗口解锁 Vault')
  try{
-  await call('hostPassword.unlock')
-  if(await refresh())notice('Vault 已解锁')
- }catch(error){if(!refreshing)notice(vaultUnlocked?error.message:`Vault 未解锁：${error.message}`,true)}
+  const result=await call('hostPassword.unlock')
+  if(result?.unlocked!==true)throw Error('Vault 验证未成功')
+  vaultUnlocked=true
+  if(await refresh())notice('Vault 已验证')
+ }catch(error){++generation;clearVaultVerification();notice(`Vault 未解锁：${error.message}`,true)}
  finally{unlocking=false;updateCount()}
 }
 $('search').oninput=render
@@ -475,6 +491,7 @@ $('start').onclick=()=>action(async()=>{
 $('cancel').onclick=()=>action(async()=>{if(!vaultReady() || !busy || !cancellable)return;if(jobId){await call(`${api()}.cancel`,{jobId});if(vaultReady())notice('已停止后续账户，正在处理的账户会安全收尾')}})
 async function recoverProfile(profileId){
  if(!vaultReady() || busy)return
+ if(![...profiles,...recoveryProfiles].some(profile=>profile.id===profileId && profile.pending===true))throw Error('请选择一个待确认账户')
  setBusy(true)
  try{
   notice('请在主窗口确认并验证 Vault')
@@ -482,6 +499,9 @@ async function recoverProfile(profileId){
   const messages=isKeyMode()?{success:'新密钥已验证并切换认证',oldConfirmed:'原认证已验证，候选密钥已清除',pending:'仍无法确认密钥，请稍后处理'}:{success:'新密码已验证并保存',oldConfirmed:'原密码已验证，候选密码已清除',pending:'仍无法确认密码，请稍后处理'}
   if(!result || !messages[result.status])throw Error('宿主返回的恢复状态不符合接口契约，未确认恢复结果')
   if(await refresh() && vaultReady())notice(messages[result.status])
+ }catch(error){
+  if(/(?:没有|无|不存在)[^\n]*待确认|no pending|pending[^\n]*(?:not found|does not exist)/i.test(error.message))await refresh()
+  throw error
  }finally{setBusy(false)}
 }
 $('recover').onclick=()=>action(async()=>{if(!vaultReady())return;if(selected.size!==1)throw Error('请选择一个待确认账户');await recoverProfile([...selected.values()][0])})

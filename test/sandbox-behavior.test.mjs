@@ -66,11 +66,13 @@ const document = {
 }
 const listeners = { message: [], keydown: [], beforeunload: [] }
 const log = []
+let locked = false, pending = false, unlockError = '', unlockResult = { unlocked: true }, recoverError = ''
 const listPayload = () => ({
-  encrypted: true, unlocked: true, groups: [],
+  encrypted: true, unlocked: !locked, groups: [{ id: 'g1', name: '生产' }],
+  recoveryProfiles: [{ id: 'legacy', name: '旧账户', host: '192.0.2.12', port: 22, user: 'root' }],
   profiles: [
-    { id: 'pw1', name: 'web', host: '192.0.2.10', port: 22, user: 'root', group: 'g1', auth: 'password', hasPassword: true, hasPrivateKey: false, pending: false },
-    { id: 'key1', name: 'db', host: '192.0.2.11', port: 22, user: 'root', group: 'g1', auth: 'publicKey', hasPassword: false, hasPrivateKey: true, pending: false },
+    { id: 'pw1', name: 'web', host: '192.0.2.10', port: 22, user: 'root', group: 'g1', auth: 'password', hasPassword: true, hasPrivateKey: false, pending },
+    { id: 'key1', name: 'db', host: '192.0.2.11', port: 22, user: 'root', group: 'g1', auth: 'publicKey', hasPassword: false, hasPrivateKey: true, pending },
   ],
 })
 let failKeyList = false
@@ -82,9 +84,13 @@ const route = method => {
     const payload = listPayload()
     return omitGroups ? { ok: true, result: { encrypted: true, unlocked: true, profiles: payload.profiles } } : { ok: true, result: payload }
   }
-  if (method === 'hostKey.start') return { ok: true, result: { jobId: 'job-1' } }
-  if (method === 'hostKey.status') return { ok: true, result: { done: true, rows: [] } }
-  if (method === 'hostPassword.unlock') return { ok: true, result: { unlocked: true } }
+  if (method.endsWith('.recover')) {
+    pending = false
+    return recoverError ? { ok: false, error: recoverError } : { ok: true, result: { status: 'success' } }
+  }
+  if (method.endsWith('.start')) return { ok: true, result: { jobId: 'job-1' } }
+  if (method.endsWith('.status')) return { ok: true, result: { done: true, rows: [] } }
+  if (method === 'hostPassword.unlock') return unlockError ? { ok: false, error: unlockError } : { ok: true, result: unlockResult }
   return { ok: false, error: 'unexpected method ' + method }
 }
 const dispatchMessage = data => { for (const handler of listeners.message) handler({ source: parent, data }) }
@@ -109,10 +115,40 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 
 vm.runInContext(scriptText, context)
 await tick()
-assert.ok(log.includes('hostPassword.list'), 'the sandbox reads the password list on load')
+assert.equal(log.length, 0, 'global unlocked Vault does not authorize this panel or read lists on load')
 assert.equal(elements.get('start').textContent, '修改选中账户', 'password mode keeps the batch-password label')
 assert.equal(elements.get('passwordRules').hidden, false, 'password mode keeps rules visible')
 assert.equal(elements.get('keyInfo').hidden, true, 'password mode hides key instructions')
+
+// Refresh, notifications, mode changes and programmatic handlers cannot bypass verification.
+for (const mode of ['generate', 'rotate', 'password']) {
+  elements.get('mode').value = mode
+  await elements.get('mode').onchange()
+  await elements.get('refresh').onclick()
+  dispatchMessage({ channel: 'issh-plugin-host-state-changed' })
+  for (const id of ['start', 'recover', 'recoverOther', 'historyBtn', 'export', 'cancel']) await elements.get(id).onclick()
+  await vm.runInContext("recoverProfile('pw1')", context)
+  assert.equal(elements.get('start').disabled, true)
+}
+assert.equal(log.length, 0, 'unverified modes never issue business RPCs')
+for (const result of [{ unlocked: false }, {}, null]) {
+  unlockResult = result
+  await elements.get('unlock').onclick()
+  assert.equal(log.some(method => method.endsWith('.list')), false, 'unsuccessful unlock payload never reads business lists')
+}
+unlockResult = { unlocked: true }
+for (const error of ['用户取消验证', '主口令错误']) {
+  unlockError = error
+  await elements.get('unlock').onclick()
+  assert.equal(elements.get('unlock').textContent, '解锁 Vault')
+}
+unlockError = ''
+await elements.get('unlock').onclick()
+assert.ok(log.includes('hostPassword.list'), 'explicit successful unlock reads the password list')
+assert.equal(elements.get('unlock').textContent, 'Vault 已验证')
+assert.equal(elements.get('recoverOther').disabled, false, 'legacy password recovery-only list remains usable without a pending flag')
+await vm.runInContext("recoverProfile('legacy')", context)
+assert.ok(log.includes('hostPassword.recover'), 'legacy recovery-only entry routes to password recovery')
 
 // Switch to generate mode and observe hostKey routing plus the key-specific chrome.
 elements.get('mode').value = 'generate'
@@ -129,25 +165,86 @@ assert.equal(elements.get('export').hidden, true, 'generate mode hides password 
 failKeyList = true
 elements.get('refresh').onclick()
 await tick()
-assert.ok(elements.get('notice').textContent.includes('密钥操作失败'), 'a failing hostKey list reports a key operation error')
-assert.ok(elements.get('notice').textContent.includes('hostKey'), 'the failure message names hostKey so the user knows what to update')
+assert.ok(elements.get('notice').textContent.includes('fixture hostKey list failed'), 'a failing hostKey list reports the original error')
+assert.ok(!elements.get('notice').textContent.includes('更新'), 'business failures do not suggest an upgrade')
 assert.equal(elements.get('start').disabled, true, 'a failing hostKey list disables the primary action')
 assert.equal(log.filter(method => method === 'hostKey.start').length, 0, 'a failing hostKey list never starts a job')
 
 // An old host that omits the groups array must also fail closed rather than silently succeed.
 failKeyList = false
 omitGroups = true
-elements.get('refresh').onclick()
+elements.get('unlock').onclick()
 await tick()
 assert.ok(elements.get('notice').textContent.includes('接口契约'), 'a hostKey list missing groups fails the contract check')
-assert.ok(elements.get('notice').textContent.includes('密钥操作失败'), 'the contract failure is reported as a key operation error')
+assert.ok(!elements.get('notice').textContent.includes('更新'), 'contract failures do not invent a compatibility diagnosis')
 
 // Switching back to password mode must route to hostPassword again.
 omitGroups = false
 elements.get('mode').value = 'password'
 elements.get('mode').onchange()
 await tick()
+await elements.get('unlock').onclick()
 assert.equal(log.filter(method => method === 'hostPassword.list').length >= 2, true, 'password mode keeps routing to hostPassword.list')
 assert.equal(elements.get('start').textContent, '修改选中账户', 'returning to password mode restores the batch-password label')
 
-console.log(`sandbox-behavior: ${log.length} routed RPC calls verified (hostPassword/hostKey routing, key chrome, fail-closed list and old-host contract errors)`)
+
+// Normal, pending and expired recovery are checked in all three modes, including direct entry.
+for (const mode of ['password', 'generate', 'rotate']) {
+  elements.get('mode').value = mode
+  await elements.get('mode').onchange()
+  const id = mode === 'rotate' ? 'key1' : 'pw1'
+  const select = () => vm.runInContext(`selected.set(accountKey(profiles.find(p=>p.id==='${id}')), '${id}');updateCount()`, context)
+  select()
+  assert.equal(elements.get('recover').disabled, true, mode + ' normal account cannot recover')
+  const before = log.length
+  await elements.get('recover').onclick()
+  await assert.rejects(vm.runInContext(`recoverProfile('${id}')`, context), /请选择一个待确认账户/)
+  assert.equal(log.length, before, 'entry checks prevent RPC even for programmatic clicks')
+  pending = true
+  await elements.get('refresh').onclick()
+  select()
+  assert.equal(elements.get('recover').disabled, false, mode + ' pending account can recover')
+  recoverError = '账户没有待确认操作'
+  const listBefore = log.filter(m => m.endsWith('.list')).length
+  await elements.get('recover').onclick()
+  assert.equal(log.filter(m => m.endsWith('.list')).length, listBefore + 1, 'expired pending refreshes list')
+  assert.equal(elements.get('notice').textContent, recoverError, 'expired pending is not a version problem')
+  assert.equal(elements.get('recover').disabled, true)
+  recoverError = ''
+  pending = true
+  await elements.get('refresh').onclick()
+  await elements.get('recover').onclick()
+  assert.equal(elements.get('recover').disabled, true, 'successful recovery refreshes pending state')
+  const startBefore = log.filter(m => m.endsWith('.start')).length
+  await elements.get('start').onclick()
+  assert.equal(log.filter(m => m.endsWith('.start')).length, startBefore + 1, mode + ' can start after explicit verification')
+  assert.equal(elements.get('mode').disabled, false, 'completed job releases mode lock')
+}
+for (const message of ['账户没有待确认操作', '用户取消验证', '主口令错误', 'SSH connection failed', 'unsupported key algorithm']) {
+  context.errorText = message
+  assert.equal(vm.runInContext('operationError(new Error(errorText))', context), message)
+}
+for (const message of ['unknown method hostKey.start', 'unsupported method hostKey.recover', 'Method not found: hostKey.list']) {
+  context.errorText = message
+  assert.match(vm.runInContext('operationError(new Error(errorText))', context), /旧版本需更新/)
+}
+// Host relock and later external unlock cannot silently restore this panel's verification.
+locked = true
+await elements.get('refresh').onclick()
+assert.equal(elements.get('unlock').textContent, '解锁 Vault')
+assert.equal(vm.runInContext('profiles.length + selected.size + recoveryProfiles.length', context), 0)
+locked = false
+const before = log.length
+await elements.get('refresh').onclick()
+elements.get('mode').value = 'password'
+await elements.get('mode').onchange()
+dispatchMessage({ channel: 'issh-plugin-host-state-changed' })
+await tick()
+assert.equal(log.length, before, 'refresh, mode switching and external unlock cannot restore verification')
+await elements.get('unlock').onclick()
+assert.equal(elements.get('unlock').textContent, 'Vault 已验证')
+unlockError = '主口令错误'
+await elements.get('unlock').onclick()
+assert.equal(elements.get('unlock').textContent, '解锁 Vault')
+assert.equal(vm.runInContext('profiles.length + selected.size', context), 0, 'failed revalidation clears previously authorized state')
+console.log(`sandbox-behavior: PASS (${log.length} RPC calls; explicit verification, three modes, pending recovery, error classification and relock)`)
